@@ -7,13 +7,19 @@ app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS configuracion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tasa_bcv REAL
+        )
+    ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             codigo TEXT UNIQUE,
             nombre TEXT NOT NULL,
             categoria TEXT,
-            precio_compra REAL,
             precio_venta REAL,
             stock INTEGER,
             imagen_url TEXT
@@ -22,205 +28,257 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            producto_id INTEGER,
-            cantidad INTEGER,
-            total REAL,
+            total_usd REAL,
+            total_bs REAL,
             metodo_pago TEXT,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fiados (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente TEXT NOT NULL,
-            telefono TEXT,
-            monto_deuda REAL,
-            estado TEXT DEFAULT 'PENDIENTE',
+            operador TEXT,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     conn.commit()
+    
+    # Configurar tasa BCV inicial si no existe
+    cursor.execute('SELECT COUNT(*) FROM configuracion')
+    if cursor.fetchone()[0] == 0:
+        cursor.execute('INSERT INTO configuracion (tasa_bcv) VALUES (784.66)')
+        conn.commit()
+        
+    # Productos de ejemplo idénticos a la referencia
+    cursor.execute('SELECT COUNT(*) FROM productos')
+    if cursor.fetchone()[0] == 0:
+        prods = [
+            ('7591014', 'Harina PAN 1kg', 'Víveres', 1.48, 87, 'https://resources.secom.shop/images/7591014101016/7591014101016-1.webp'),
+            ('7591015', 'Mayonesa Mavesa 500g', 'Víveres', 2.39, 37, 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQZp89C5J2_fJk-7x8sQ3q5g6H8s9vQ2s8w1A&s'),
+            ('7591016', 'Salsa de Tomate Pampero 397g', 'Víveres', 1.32, 109, 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT7vJ8s3Q9sQ2s8w1A&s'),
+            ('7591017', 'Jamon De Pierna La Montserratina 200g', 'Charcutería', 2.26, 63, 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR8s3Q9sQ2s8w1A&s'),
+            ('7591018', 'Detergent Ariel regular 1kg', 'Limpieza', 1.70, 54, 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQZp89C5J2_fJk-7x8sQ3q5g6H8s9vQ2s8w1A&s'),
+            ('7591019', '7up 2l', 'Bebidas', 3.57, 89, 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQZp89C5J2_fJk-7x8sQ3q5g6H8s9vQ2s8w1A&s')
+        ]
+        cursor.executemany('INSERT INTO productos (codigo, nombre, categoria, precio_venta, stock, imagen_url) VALUES (?, ?, ?, ?, ?, ?)', prods)
+        conn.commit()
+        
     conn.close()
 
 init_db()
 
-LAYOUT_HTML = '''
+# --- ESTILO VISUAL IDÉNTICO A PRECIOS AL DÍA ---
+BASE_LAYOUT = '''
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistema POS Bodega Pro</title>
+    <title>Precios Al Día</title>
     <style>
         * { box-sizing: border-box; }
-        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f0f2f5; color: #1c1e21; }
-        .navbar { background: #0d6efd; padding: 12px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
-        .navbar a { color: white; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; font-size: 0.95rem; background: rgba(255,255,255,0.15); }
-        .navbar a:hover, .navbar a.active { background: rgba(255,255,255,0.35); }
-        .container { max-width: 1050px; margin: 15px auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-        h1 { color: #0d6efd; font-size: 1.4rem; margin-top: 0; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
-        th, td { padding: 8px; border-bottom: 1px solid #e4e6eb; text-align: left; }
-        th { background-color: #f7f8fa; color: #65676b; }
-        form { margin-top: 10px; background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #dee2e6; }
-        input, select { padding: 9px; margin: 5px 0; width: 100%; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
-        button { background: #198754; color: white; border: none; padding: 10px; width: 100%; cursor: pointer; border-radius: 6px; font-weight: bold; font-size: 0.95rem; margin-top: 5px; }
-        button.venta { background: #fd7e14; }
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f4f7f6; color: #2d3748; }
         
-        /* DISEÑO DE TARJETAS TÁCTILES CON IMAGEN */
-        .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 15px; max-height: 400px; overflow-y: auto; padding: 5px; }
-        .product-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px; text-align: center; cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; display: flex; flex-direction: column; justify-content: space-between; align-items: center; }
-        .product-card:hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0,0,0,0.12); border-color: #0d6efd; }
-        .product-card img { width: 80px; height: 80px; object-fit: contain; border-radius: 6px; margin-bottom: 6px; }
-        .product-card .title { font-size: 0.85rem; font-weight: bold; color: #333; line-height: 1.1; height: 2.2em; overflow: hidden; }
-        .product-card .price { color: #198754; font-weight: bold; font-size: 1rem; margin-top: 4px; }
-        .product-card .stock { font-size: 0.75rem; color: #666; }
+        /* BARRA NAVEGACIÓN INFERIOR FLOTANTE */
+        .floating-nav { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1a202c; padding: 10px 20px; border-radius: 40px; display: flex; gap: 25px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); z-index: 1000; }
+        .nav-item { color: #a0aec0; text-decoration: none; display: flex; flex-direction: column; align-items: center; font-size: 0.75rem; font-weight: 500; transition: 0.2s; }
+        .nav-item span { font-size: 1.2rem; margin-bottom: 2px; }
+        .nav-item:hover, .nav-item.active { color: #48bb78; }
+
+        .main-container { max-width: 1400px; margin: 0 auto; padding: 20px 20px 90px 20px; }
         
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
-        .stat-card { background: #e7f1ff; padding: 12px; border-radius: 8px; border-left: 4px solid #0d6efd; }
-        .stat-card h3 { margin: 0 0 5px 0; font-size: 0.85rem; color: #495057; }
-        .stat-card p { margin: 0; font-size: 1.2rem; font-weight: bold; color: #0d6efd; }
+        /* HEADER */
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; background: white; padding: 15px 25px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+        .logo { font-size: 1.8rem; font-weight: bold; color: #1a202c; letter-spacing: -1px; }
+        .logo span { color: #2b6cb0; }
+        .bcv-badge { background: #e2e8f0; padding: 6px 12px; border-radius: 20px; font-weight: bold; font-size: 0.85rem; color: #2d3748; }
+
+        /* TARJETAS DE MÉTRICAS */
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .metric-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.04); border-top: 4px solid #48bb78; }
+        .metric-card h3 { margin: 0 0 8px 0; font-size: 0.85rem; color: #718096; text-transform: uppercase; }
+        .metric-card .value { font-size: 1.6rem; font-weight: bold; color: #1a202c; margin: 0; }
+        .metric-card .sub { font-size: 0.85rem; color: #718096; margin-top: 5px; }
+
+        /* BOTONES DE ACCIÓN */
+        .action-row { display: grid; grid-template-columns: 2fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .close-box { background: linear-gradient(135deg, #dd6b20, #c05621); color: white; padding: 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .expense-box { background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+
+        /* ESTILOS GENERALES */
+        .btn-green { background: #2f855a; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .btn-green:hover { background: #276749; }
+        
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #edf2f7; font-size: 0.9rem; }
+        th { background: #f7fafc; color: #4a5568; font-weight: 600; }
     </style>
 </head>
 <body>
-    <div class="navbar">
-        <a href="/ventas" class="{% if active == 'ventas' %}active{% endif %}">🛒 POS Ventas Visual</a>
-        <a href="/inventario" class="{% if active == 'inventario' %}active{% endif %}">📦 Inventario</a>
-        <a href="/fiados" class="{% if active == 'fiados' %}active{% endif %}">📋 Fiados</a>
-        <a href="/resumen" class="{% if active == 'resumen' %}active{% endif %}">📊 Cierre de Caja</a>
-    </div>
-    <div class="container">
+    <div class="main-container">
         {% block content %}{% endblock %}
+    </div>
+
+    <!-- BARRA NAVEGACIÓN FLOTANTE -->
+    <div class="floating-nav">
+        <a href="/" class="nav-item {% if active == 'inicio' %}active{% endif %}"><span>🏠</span>Inicio</a>
+        <a href="/vender" class="nav-item {% if active == 'vender' %}active{% endif %}"><span>🛒</span>Vender</a>
+        <a href="/inventario" class="nav-item {% if active == 'inventario' %}active{% endif %}"><span>📦</span>Inventario</a>
+        <a href="/reportes" class="nav-item {% if active == 'reportes' %}active{% endif %}"><span>📊</span>Reportes</a>
     </div>
 </body>
 </html>
 '''
 
-# --- VENTANA 1: VENTAS VISUALES CON TARJETAS E IMÁGENES ---
+# --- PANTALLA 1: SELECCIÓN DE OPERADOR / INICIO ---
 @app.route('/')
-@app.route('/ventas')
-def ventas():
+def inicio():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT id, codigo, nombre, precio_venta, stock, imagen_url FROM productos')
-    productos = cursor.fetchall()
+    cursor.execute('SELECT tasa_bcv FROM configuracion LIMIT 1')
+    tasa = cursor.fetchone()[0]
     
-    cursor.execute('''
-        SELECT ventas.id, productos.nombre, ventas.cantidad, ventas.total, ventas.metodo_pago, ventas.fecha 
-        FROM ventas JOIN productos ON ventas.producto_id = productos.id 
-        ORDER BY ventas.fecha DESC LIMIT 8
-    ''')
-    ultimas_ventas = cursor.fetchall()
+    cursor.execute('SELECT SUM(total_usd), COUNT(*) FROM ventas')
+    res = cursor.fetchone()
+    total_ventas = res[0] or 0.0
+    cant_ventas = res[1] or 0
     conn.close()
     
-    html = LAYOUT_HTML.replace('{% block content %}{% endblock %}', '''
-    <h1>🛒 Punto de Venta Visual (Toca para seleccionar)</h1>
-    
-    <label><b>🔍 Buscar o Escanear Código:</b></label>
-    <input type="text" id="buscador" placeholder="Pasa el lector o escribe el producto..." autofocus autocomplete="off">
-    
-    <!-- CATALOGO EN GRID CON FOTOS -->
-    <div class="products-grid" id="grid_productos">
-        {% for p in productos %}
-        <div class="product-card" onclick="seleccionarProducto('{{ p[0] }}', '{{ p[2] }}')" data-codigo="{{ p[1] }}" data-nombre="{{ p[2] }}">
-            <img src="{{ p[5] or 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png' }}" alt="{{ p[2] }}">
-            <div class="title">{{ p[2] }}</div>
-            <div class="price">${{ "%.2f"|format(p[3]) }}</div>
-            <div class="stock">Disponibles: {{ p[4] }}</div>
-        </div>
-        {% endfor %}
+    html = BASE_LAYOUT.replace('{% block content %}{% endblock %}', f'''
+    <div class="header">
+        <div class="logo">Precios<span>AlDía</span></div>
+        <div class="bcv-badge">Tasa BCV: {tasa:.2f} Bs/$</div>
     </div>
 
-    <form action="/registrar_venta" method="POST" style="margin-top: 15px; background: #eef5ff; border-color: #0d6efd;">
-        <h3 style="margin: 0 0 8px 0; color: #0d6efd;">Cobrar Producto Seleccionado:</h3>
-        
-        <select name="producto_id" id="select_producto" required>
-            <option value="">-- Seleccione un producto arriba o escanee --</option>
-            {% for p in productos %}
-            <option value="{{ p[0] }}">
-                {{ p[2] }} - ${{ "%.2f"|format(p[3]) }}
-            </option>
-            {% endfor %}
-        </select>
-        
-        <div style="display: flex; gap: 10px; margin-top: 8px;">
-            <div style="flex: 1;">
-                <label>Cantidad:</label>
-                <input type="number" name="cantidad" value="1" min="1" required>
-            </div>
-            <div style="flex: 2;">
-                <label>Método de Pago:</label>
-                <select name="metodo_pago" required>
-                    <option value="Efectivo USD">Efectivo USD ($)</option>
-                    <option value="Pago Móvil">Pago Móvil (Bs)</option>
-                    <option value="Punto de Venta">Punto de Venta</option>
-                    <option value="Efectivo Bs">Efectivo Bolívares (Bs)</option>
-                </select>
-            </div>
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <h3>Ventas Totales</h3>
+            <p class="value">${total_ventas:.2f}</p>
+            <p class="sub">{cant_ventas} operaciones registradas</p>
         </div>
-        
-        <button type="submit" class="venta"> Registrar Venta</button>
-    </form>
+        <div class="metric-card" style="border-top-color: #3182ce;">
+            <h3>Ganancia Estimada</h3>
+            <p class="value" style="color: #3182ce;">+${(total_ventas * 0.3):.2f}</p>
+            <p class="sub">Margen promedio 30%</p>
+        </div>
+        <div class="metric-card" style="border-top-color: #d69e2e;">
+            <h3>Tasa Activa</h3>
+            <p class="value" style="color: #d69e2e;">{tasa:.2f} Bs/$</p>
+            <p class="sub">Actualizada hoy</p>
+        </div>
+    </div>
 
-    <script>
-        function seleccionarProducto(id, nombre) {
-            document.getElementById('select_producto').value = id;
-        }
-
-        const buscador = document.getElementById('buscador');
-        const cards = document.querySelectorAll('.product-card');
-
-        buscador.addEventListener('input', function() {
-            const texto = buscador.value.toLowerCase();
-            cards.forEach(card => {
-                const codigo = card.getAttribute('data-codigo') ? card.getAttribute('data-codigo').toLowerCase() : '';
-                const nombre = card.getAttribute('data-nombre') ? card.getAttribute('data-nombre').toLowerCase() : '';
-                
-                if (codigo.includes(texto) || nombre.includes(texto)) {
-                    card.style.display = 'flex';
-                } else {
-                    card.style.display = 'none';
-                }
-            });
-        });
-    </script>
-
-    <h2 style="margin-top: 20px;">Últimas Ventas</h2>
-    <table>
-        <tr><th>Producto</th><th>Cant</th><th>Total</th><th>Pago</th><th>Fecha</th></tr>
-        {% for v in ultimas_ventas %}
-        <tr>
-            <td><strong>{{ v[1] }}</strong></td>
-            <td>{{ v[2] }}</td>
-            <td>${{ "%.2f"|format(v[3]) }}</td>
-            <td><small>{{ v[4] }}</small></td>
-            <td><small>{{ v[5] }}</small></td>
-        </tr>
-        {% endfor %}
-    </table>
+    <div class="action-row">
+        <div class="close-box">
+            <div>
+                <h2 style="margin:0 0 5px 0;">Caja Operativa</h2>
+                <p style="margin:0; opacity:0.9;">Control diario de ingresos y cierres</p>
+            </div>
+            <a href="/vender" style="background:white; color:#c05621; padding:10px 20px; border-radius:8px; text-decoration:none; font-weight:bold;">Ir a Vender ➔</a>
+        </div>
+        <div class="expense-box">
+            <div>
+                <h3 style="margin:0 0 5px 0;">Inventario</h3>
+                <p style="margin:0; color:#718096; font-size:0.9rem;">Productos y stock</p>
+            </div>
+            <a href="/inventario" class="btn-green" style="text-decoration:none;">Gestionar</a>
+        </div>
+    </div>
     ''')
-    return render_template_string(html, active='ventas', productos=productos, ultimas_ventas=ultimas_ventas)
+    return render_template_string(html, active='inicio')
 
-@app.route('/registrar_venta', methods=['POST'])
-def registrar_venta():
-    producto_id = int(request.form['producto_id'])
-    cantidad = int(request.form['cantidad'])
-    metodo_pago = request.form['metodo_pago']
-    
+# --- PANTALLA 2: PUNTO DE VENTA (VENDER) CON CARRITO LATERAL ---
+@app.route('/vender')
+def vender():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT precio_venta, stock FROM productos WHERE id = ?', (producto_id,))
-    prod = cursor.fetchone()
-    if prod and prod[1] >= cantidad:
-        total = prod[0] * cantidad
-        cursor.execute('INSERT INTO ventas (producto_id, cantidad, total, metodo_pago) VALUES (?, ?, ?, ?)', 
-                       (producto_id, cantidad, total, metodo_pago))
-        cursor.execute('UPDATE productos SET stock = ? WHERE id = ?', (prod[1] - cantidad, producto_id))
-        conn.commit()
+    cursor.execute('SELECT tasa_bcv FROM configuracion LIMIT 1')
+    tasa = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT id, nombre, precio_venta, stock, imagen_url FROM productos')
+    productos = cursor.fetchall()
     conn.close()
-    return redirect(url_for('ventas'))
+    
+    html = BASE_LAYOUT.replace('{% block content %}{% endblock %}', '''
+    <style>
+        .pos-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .catalog { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+        .cart-panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; height: 75vh; }
+        
+        .prod-grid-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; max-height: 65vh; overflow-y: auto; margin-top: 15px; }
+        .prod-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; text-align: center; cursor: pointer; background: #fff; transition: 0.15s; }
+        .prod-card:hover { border-color: #3182ce; transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .prod-card img { width: 70px; height: 70px; object-fit: contain; margin-bottom: 5px; }
+        .prod-card .title { font-size: 0.8rem; font-weight: bold; color: #2d3748; height: 2.4em; overflow: hidden; }
+        .prod-card .price { color: #2f855a; font-weight: bold; font-size: 0.95rem; margin-top: 4px; }
+        
+        .cart-items { flex-grow: 1; overflow-y: auto; margin: 15px 0; border-top: 1px solid #edf2f7; border-bottom: 1px solid #edf2f7; padding: 10px 0; }
+        .cart-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 0.9rem; }
+    </style>
 
-# --- VENTANA 2: INVENTARIO CON REGISTRO DE FOTOS ---
+    <div class="pos-grid">
+        <div class="catalog">
+            <h2 style="margin-top:0;">Catálogo de Ventas</h2>
+            <input type="text" id="busc" placeholder="🔍 Buscar producto..." style="width:100%; padding:12px; border:1px solid #cbd5e0; border-radius:8px; font-size:1rem;">
+            
+            <div class="prod-grid-catalog">
+                {% for p in productos %}
+                <div class="prod-card" onclick="agregarAlCarrito('{{ p[1] }}', {{ p[2] }})">
+                    <img src="{{ p[4] or 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png' }}" alt="">
+                    <div class="title">{{ p[1] }}</div>
+                    <div class="price">${{ "%.2f"|format(p[2]) }}</div>
+                    <small style="color:#718096;">Stock: {{ p[3] }}</small>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="cart-panel">
+            <div>
+                <h3 style="margin-top:0; border-bottom:2px solid #2f855a; padding-bottom:8px;">🛒 Cesta de Compra</h3>
+                <div class="cart-items" id="lista-cesta">
+                    <p style="color:#a0aec0; text-align:center; margin-top:30px;">Cesta vacía</p>
+                </div>
+            </div>
+
+            <div>
+                <div style="display:flex; justify-content:space-between; font-size:1.2rem; font-weight:bold; margin-bottom:15px;">
+                    <span>TOTAL:</span>
+                    <span id="total-cesta" style="color:#2f855a;">$0.00</span>
+                </div>
+                <form action="/procesar_cobro" method="POST" id="form-cobro">
+                    <input type="hidden" name="total_usd" id="input-total" value="0">
+                    <button type="submit" class="btn-green" style="width:100%; padding:14px; font-size:1rem;">COBRAR (LISTO)</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let total = 0;
+        function agregarAlCarrito(nombre, precio) {
+            total += precio;
+            document.getElementById('total-cesta').innerText = '$' + total.toFixed(2);
+            document.getElementById('input-total').value = total.toFixed(2);
+            
+            let lista = document.getElementById('lista-cesta');
+            if (lista.innerHTML.includes('Cesta vacía')) { lista.innerHTML = ''; }
+            lista.innerHTML += `<div class="cart-item"><span>${nombre}</span> <b>$${precio.toFixed(2)}</b></div>`;
+        }
+    </script>
+    ''')
+    return render_template_string(html, active='vender')
+
+@app.route('/procesar_cobro', methods=['POST'])
+def procesar_cobro():
+    total_usd = float(request.form['total_usd'])
+    conn = sqlite3.connect('bodega.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT tasa_bcv FROM configuracion LIMIT 1')
+    tasa = cursor.fetchone()[0]
+    total_bs = total_usd * tasa
+    
+    cursor.execute('INSERT INTO ventas (total_usd, total_bs, metodo_pago, operador) VALUES (?, ?, ?, ?)',
+                   (total_usd, total_bs, 'Efectivo USD', 'Administrador'))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('vender'))
+
+# --- PANTALLA 3: INVENTARIO VISUAL ---
 @app.route('/inventario')
 def inventario():
     conn = sqlite3.connect('bodega.db')
@@ -229,132 +287,52 @@ def inventario():
     productos = cursor.fetchall()
     conn.close()
     
-    html = LAYOUT_HTML.replace('{% block content %}{% endblock %}', '''
-    <h1>📦 Gestión de Inventario</h1>
-    
-    <form action="/add_product" method="POST">
-        <h3>➕ Registrar Nuevo Producto</h3>
-        <input type="text" name="codigo" placeholder="Código de barras (opcional)">
-        <input type="text" name="nombre" placeholder="Nombre del producto" required>
-        <input type="text" name="categoria" placeholder="Categoría">
-        <input type="text" name="imagen_url" placeholder="URL de la Foto del Producto (ej. Link de Google o Web)">
-        <div style="display: flex; gap: 10px;">
-            <input type="number" step="0.01" name="precio_compra" placeholder="Precio Compra ($)" required>
-            <input type="number" step="0.01" name="precio_venta" placeholder="Precio Venta ($)" required>
-            <input type="number" name="stock" placeholder="Stock Inicial" required>
-        </div>
-        <button type="submit">Guardar Producto</button>
-    </form>
-
-    <h2>Inventario Actual</h2>
-    <table>
-        <tr><th>Foto</th><th>Código</th><th>Nombre</th><th>P. Venta</th><th>Stock</th></tr>
-        {% for p in productos %}
-        <tr>
-            <td><img src="{{ p[7] or 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png' }}" width="40" height="40" style="object-fit:contain;"></td>
-            <td>{{ p[1] or 'N/D' }}</td>
-            <td><strong>{{ p[2] }}</strong></td>
-            <td>${{ "%.2f"|format(p[5]) }}</td>
-            <td><span style="color: {% if p[6] < 5 %}red{% else %}green{% endif %}">{{ p[6] }}</span></td>
-        </tr>
-        {% endfor %}
-    </table>
+    html = BASE_LAYOUT.replace('{% block content %}{% endblock %}', '''
+    <div style="background:white; padding:20px; border-radius:12px;">
+        <h2 style="margin-top:0;">Control de Inventario</h2>
+        <table>
+            <tr><th>Imagen</th><th>Código</th><th>Nombre</th><th>Precio Venta</th><th>Stock</th></tr>
+            {% for p in productos %}
+            <tr>
+                <td><img src="{{ p[6] or 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png' }}" width="40" height="40" style="object-fit:contain;"></td>
+                <td>{{ p[1] }}</td>
+                <td><b>{{ p[2] }}</b></td>
+                <td>${{ "%.2f"|format(p[4]) }}</td>
+                <td>{{ p[5] }} unds</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
     ''')
-    return render_template_string(html, active='inventario', productos=productos)
+    return render_template_string(html, active='inventario')
 
-@app.route('/add_product', methods=['POST'])
-def add_product():
+# --- PANTALLA 4: REPORTES Y MÉTRICAS ---
+@app.route('/reportes')
+def reportes():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO productos (codigo, nombre, categoria, precio_compra, precio_venta, stock, imagen_url) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                   (request.form['codigo'], request.form['nombre'], request.form['categoria'], 
-                    float(request.form['precio_compra']), float(request.form['precio_venta']), int(request.form['stock']), request.form['imagen_url']))
-    conn.commit()
-    conn.close()
-    return redirect(url_for('inventario'))
-
-# --- VENTANA 3: CONTROL DE FIADOS ---
-@app.route('/fiados')
-def fiados():
-    conn = sqlite3.connect('bodega.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM fiados ORDER BY fecha DESC')
-    lista_fiados = cursor.fetchall()
+    cursor.execute('SELECT SUM(total_usd), COUNT(*) FROM ventas')
+    res = cursor.fetchone()
+    total = res[0] or 0.0
+    count = res[1] or 0
     conn.close()
     
-    html = LAYOUT_HTML.replace('{% block content %}{% endblock %}', '''
-    <h1>📋 Control de Fiados (Cuentas por Cobrar)</h1>
-    
-    <form action="/add_fiado" method="POST">
-        <h3>Registrar Nuevo Fiado</h3>
-        <input type="text" name="cliente" placeholder="Nombre y Apellido del Cliente" required>
-        <input type="text" name="telefono" placeholder="Número de Teléfono">
-        <input type="number" step="0.01" name="monto_deuda" placeholder="Monto Total Deuda ($)" required>
-        <button type="submit" style="background: #dc3545;">Registrar Fiado</button>
-    </form>
-
-    <h2>Clientes con Deudas Pendientes</h2>
-    <table>
-        <tr><th>Cliente</th><th>Teléfono</th><th>Deuda ($)</th><th>Estado</th><th>Fecha</th></tr>
-        <%- for f in lista_fiados %}
-        <tr>
-            <td><strong>{{ f[1] }}</strong></td>
-            <td>{{ f[2] }}</td>
-            <td>${{ "%.2f"|format(f[3]) }}</td>
-            <td>{{ f[4] }}</td>
-            <td><small>{{ f[5] }}</small></td>
-        </tr>
-        {% endfor %}
-    </table>
-    ''').replace('<%- for', '{% for')
-    return render_template_string(html, active='fiados', lista_fiados=lista_fiados)
-
-@app.route('/add_fiado', methods=['POST'])
-def add_fiado():
-    conn = sqlite3.connect('bodega.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO fiados (cliente, telefono, monto_deuda) VALUES (?, ?, ?)',
-                   (request.form['cliente'], request.form['telefono'], float(request.form['monto_deuda'])))
-    conn.commit()
-    conn.close()
-    return redirect(url_for('fiados'))
-
-# --- VENTANA 4: CIERRE DE CAJA ---
-@app.route('/resumen')
-def resumen():
-    conn = sqlite3.connect('bodega.db')
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT SUM(total) FROM ventas WHERE DATE(fecha) = DATE('now', 'localtime')")
-    total_dia = cursor.fetchone()[0] or 0.0
-    
-    cursor.execute("SELECT SUM(total) FROM ventas WHERE fecha >= datetime('now', '-7 days')")
-    total_sem = cursor.fetchone()[0] or 0.0
-    
-    cursor.execute("SELECT SUM(total) FROM ventas WHERE strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')")
-    total_mes = cursor.fetchone()[0] or 0.0
-    
-    conn.close()
-    
-    html = LAYOUT_HTML.replace('{% block content %}{% endblock %}', f'''
-    <h1>📊 Resumen y Cierre de Caja</h1>
-    
-    <div class="stats-grid">
-        <div class="stat-card">
-            <h3>Ventas de Hoy</h3>
-            <p>${total_dia:.2f}</p>
-        </div>
-        <div class="stat-card">
-            <h3>Ventas Semanales</h3>
-            <p>${total_sem:.2f}</p>
-        </div>
-        <div class="stat-card">
-            <h3>Ventas del Mes</h3>
-            <p>${total_mes:.2f}</p>
+    html = BASE_LAYOUT.replace('{% block content %}{% endblock %}', f'''
+    <div style="background:white; padding:20px; border-radius:12px;">
+        <h2 style="margin-top:0;">Reportes y Métricas</h2>
+        <div style="display:flex; gap:20px; margin-top:20px;">
+            <div style="background:#f7fafc; padding:20px; border-radius:8px; flex:1;">
+                <h3>Total Ingresos</h3>
+                <p style="font-size:1.8rem; color:#2f855a; font-weight:bold; margin:0;">${total:.2f}</p>
+            </div>
+            <div style="background:#f7fafc; padding:20px; border-radius:8px; flex:1;">
+                <h3>Ventas Realizadas</h3>
+                <p style="font-size:1.8rem; color:#3182ce; font-weight:bold; margin:0;">{count}</p>
+            </div>
         </div>
     </div>
     ''')
-    return render_template_string(html, active='resumen')
+    return render_template_string(html, active='reportes')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
