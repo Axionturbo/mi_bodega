@@ -7,7 +7,6 @@ app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
-    # Tabla de productos
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,10 +15,10 @@ def init_db():
             categoria TEXT,
             precio_compra REAL,
             precio_venta REAL,
-            stock INTEGER
+            stock INTEGER,
+            imagen_url TEXT
         )
     ''')
-    # Tabla de ventas con métodos de pago y tasa
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,11 +26,9 @@ def init_db():
             cantidad INTEGER,
             total REAL,
             metodo_pago TEXT,
-            tasa_bcv REAL,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Tabla de fiados / cuentas por cobrar
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS fiados (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +44,6 @@ def init_db():
 
 init_db()
 
-# --- DISEÑO BASE CON MENÚ SUPERIOR ---
 LAYOUT_HTML = '''
 <!DOCTYPE html>
 <html lang="es">
@@ -58,10 +54,10 @@ LAYOUT_HTML = '''
     <style>
         * { box-sizing: border-box; }
         body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f0f2f5; color: #1c1e21; }
-        .navbar { background: #0d6efd; padding: 10px; display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
-        .navbar a { color: white; text-decoration: none; padding: 8px 12px; border-radius: 6px; font-weight: bold; font-size: 0.9rem; background: rgba(255,255,255,0.15); }
+        .navbar { background: #0d6efd; padding: 12px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+        .navbar a { color: white; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; font-size: 0.95rem; background: rgba(255,255,255,0.15); }
         .navbar a:hover, .navbar a.active { background: rgba(255,255,255,0.35); }
-        .container { max-width: 950px; margin: 15px auto; background: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .container { max-width: 1050px; margin: 15px auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
         h1 { color: #0d6efd; font-size: 1.4rem; margin-top: 0; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
         th, td { padding: 8px; border-bottom: 1px solid #e4e6eb; text-align: left; }
@@ -70,6 +66,16 @@ LAYOUT_HTML = '''
         input, select { padding: 9px; margin: 5px 0; width: 100%; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
         button { background: #198754; color: white; border: none; padding: 10px; width: 100%; cursor: pointer; border-radius: 6px; font-weight: bold; font-size: 0.95rem; margin-top: 5px; }
         button.venta { background: #fd7e14; }
+        
+        /* DISEÑO DE TARJETAS TÁCTILES CON IMAGEN */
+        .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 15px; max-height: 400px; overflow-y: auto; padding: 5px; }
+        .product-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px; text-align: center; cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; display: flex; flex-direction: column; justify-content: space-between; align-items: center; }
+        .product-card:hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0,0,0,0.12); border-color: #0d6efd; }
+        .product-card img { width: 80px; height: 80px; object-fit: contain; border-radius: 6px; margin-bottom: 6px; }
+        .product-card .title { font-size: 0.85rem; font-weight: bold; color: #333; line-height: 1.1; height: 2.2em; overflow: hidden; }
+        .product-card .price { color: #198754; font-weight: bold; font-size: 1rem; margin-top: 4px; }
+        .product-card .stock { font-size: 0.75rem; color: #666; }
+        
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
         .stat-card { background: #e7f1ff; padding: 12px; border-radius: 8px; border-left: 4px solid #0d6efd; }
         .stat-card h3 { margin: 0 0 5px 0; font-size: 0.85rem; color: #495057; }
@@ -78,10 +84,10 @@ LAYOUT_HTML = '''
 </head>
 <body>
     <div class="navbar">
-        <a href="/ventas" class="{% if active == 'ventas' %}active{% endif %}">🛒 POS Ventas</a>
+        <a href="/ventas" class="{% if active == 'ventas' %}active{% endif %}">🛒 POS Ventas Visual</a>
         <a href="/inventario" class="{% if active == 'inventario' %}active{% endif %}">📦 Inventario</a>
-        <a href="/fiados" class="{% if active == 'fiados' %}active{% endif %}">📋 Fiados (Deudas)</a>
-        <a href="/resumen" class="{% if active == 'resumen' %}active{% endif %}">📊 Cierre / Resumen</a>
+        <a href="/fiados" class="{% if active == 'fiados' %}active{% endif %}">📋 Fiados</a>
+        <a href="/resumen" class="{% if active == 'resumen' %}active{% endif %}">📊 Cierre de Caja</a>
     </div>
     <div class="container">
         {% block content %}{% endblock %}
@@ -90,75 +96,101 @@ LAYOUT_HTML = '''
 </html>
 '''
 
-# --- VENTANA 1: PUNTO DE VENTA (POS) CON ESCANER Y MULTIMONEDA ---
+# --- VENTANA 1: VENTAS VISUALES CON TARJETAS E IMÁGENES ---
 @app.route('/')
 @app.route('/ventas')
 def ventas():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT id, codigo, nombre, precio_venta, stock FROM productos')
+    cursor.execute('SELECT id, codigo, nombre, precio_venta, stock, imagen_url FROM productos')
     productos = cursor.fetchall()
     
     cursor.execute('''
         SELECT ventas.id, productos.nombre, ventas.cantidad, ventas.total, ventas.metodo_pago, ventas.fecha 
         FROM ventas JOIN productos ON ventas.producto_id = productos.id 
-        ORDER BY ventas.fecha DESC LIMIT 10
+        ORDER BY ventas.fecha DESC LIMIT 8
     ''')
     ultimas_ventas = cursor.fetchall()
     conn.close()
     
     html = LAYOUT_HTML.replace('{% block content %}{% endblock %}', '''
-    <h1>🛒 Punto de Venta (Escáner y Multimoneda)</h1>
+    <h1>🛒 Punto de Venta Visual (Toca para seleccionar)</h1>
     
-    <form action="/registrar_venta" method="POST">
-        <label><b>Escanear código de barras o buscar producto:</b></label>
-        <input type="text" id="buscador" placeholder="Pasa el lector aquí o escribe el nombre..." autofocus autocomplete="off">
+    <label><b>🔍 Buscar o Escanear Código:</b></label>
+    <input type="text" id="buscador" placeholder="Pasa el lector o escribe el producto..." autofocus autocomplete="off">
+    
+    <!-- CATALOGO EN GRID CON FOTOS -->
+    <div class="products-grid" id="grid_productos">
+        {% for p in productos %}
+        <div class="product-card" onclick="seleccionarProducto('{{ p[0] }}', '{{ p[2] }}')" data-codigo="{{ p[1] }}" data-nombre="{{ p[2] }}">
+            <img src="{{ p[5] or 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png' }}" alt="{{ p[2] }}">
+            <div class="title">{{ p[2] }}</div>
+            <div class="price">${{ "%.2f"|format(p[3]) }}</div>
+            <div class="stock">Disponibles: {{ p[4] }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <form action="/registrar_venta" method="POST" style="margin-top: 15px; background: #eef5ff; border-color: #0d6efd;">
+        <h3 style="margin: 0 0 8px 0; color: #0d6efd;">Cobrar Producto Seleccionado:</h3>
         
-        <select name="producto_id" id="select_producto" required style="margin-top: 8px;">
-            <option value="">-- Seleccione producto --</option>
+        <select name="producto_id" id="select_producto" required>
+            <option value="">-- Seleccione un producto arriba o escanee --</option>
             {% for p in productos %}
-            <option value="{{ p[0] }}" data-codigo="{{ p[1] }}" data-nombre="{{ p[2] }}">
-                [{{ p[1] or 'Sin Código' }}] {{ p[2] }} - Stock: {{ p[4] }} - ${{ "%.2f"|format(p[3]) }}
+            <option value="{{ p[0] }}">
+                {{ p[2] }} - ${{ "%.2f"|format(p[3]) }}
             </option>
             {% endfor %}
         </select>
         
-        <label style="margin-top: 8px; display:block;">Cantidad:</label>
-        <input type="number" name="cantidad" value="1" min="1" required>
-
-        <label style="margin-top: 8px; display:block;">Método de Pago:</label>
-        <select name="metodo_pago" required>
-            <option value="Efectivo USD">Efectivo USD ($)</option>
-            <option value="Pago Móvil">Pago Móvil (Bs)</option>
-            <option value="Punto de Venta">Punto de Venta / Tarjeta</option>
-            <option value="Efectivo Bs">Efectivo Bolívares (Bs)</option>
-        </select>
+        <div style="display: flex; gap: 10px; margin-top: 8px;">
+            <div style="flex: 1;">
+                <label>Cantidad:</label>
+                <input type="number" name="cantidad" value="1" min="1" required>
+            </div>
+            <div style="flex: 2;">
+                <label>Método de Pago:</label>
+                <select name="metodo_pago" required>
+                    <option value="Efectivo USD">Efectivo USD ($)</option>
+                    <option value="Pago Móvil">Pago Móvil (Bs)</option>
+                    <option value="Punto de Venta">Punto de Venta</option>
+                    <option value="Efectivo Bs">Efectivo Bolívares (Bs)</option>
+                </select>
+            </div>
+        </div>
         
-        <button type="submit" class="venta">Cobrar y Facturar</button>
+        <button type="submit" class="venta"> Registrar Venta</button>
     </form>
 
     <script>
+        function seleccionarProducto(id, nombre) {
+            document.getElementById('select_producto').value = id;
+        }
+
         const buscador = document.getElementById('buscador');
-        const select = document.getElementById('select_producto');
+        const cards = document.querySelectorAll('.product-card');
+
         buscador.addEventListener('input', function() {
             const texto = buscador.value.toLowerCase();
-            for (let option of select.options) {
-                const codigo = option.getAttribute('data-codigo') ? option.getAttribute('data-codigo').toLowerCase() : '';
-                const nombre = option.getAttribute('data-nombre') ? option.getAttribute('data-nombre').toLowerCase() : '';
+            cards.forEach(card => {
+                const codigo = card.getAttribute('data-codigo') ? card.getAttribute('data-codigo').toLowerCase() : '';
+                const nombre = card.getAttribute('data-nombre') ? card.getAttribute('data-nombre').toLowerCase() : '';
+                
                 if (codigo.includes(texto) || nombre.includes(texto)) {
-                    select.value = option.value;
-                    break;
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
                 }
-            }
+            });
         });
     </script>
 
-    <h2>Últimas Ventas Registradas</h2>
+    <h2 style="margin-top: 20px;">Últimas Ventas</h2>
     <table>
         <tr><th>Producto</th><th>Cant</th><th>Total</th><th>Pago</th><th>Fecha</th></tr>
         {% for v in ultimas_ventas %}
         <tr>
-            <td>{{ v[1] }}</td>
+            <td><strong>{{ v[1] }}</strong></td>
             <td>{{ v[2] }}</td>
             <td>${{ "%.2f"|format(v[3]) }}</td>
             <td><small>{{ v[4] }}</small></td>
@@ -188,7 +220,7 @@ def registrar_venta():
     conn.close()
     return redirect(url_for('ventas'))
 
-# --- VENTANA 2: INVENTARIO ---
+# --- VENTANA 2: INVENTARIO CON REGISTRO DE FOTOS ---
 @app.route('/inventario')
 def inventario():
     conn = sqlite3.connect('bodega.db')
@@ -201,21 +233,25 @@ def inventario():
     <h1>📦 Gestión de Inventario</h1>
     
     <form action="/add_product" method="POST">
-        <h3>Registrar Nuevo Producto</h3>
+        <h3>➕ Registrar Nuevo Producto</h3>
         <input type="text" name="codigo" placeholder="Código de barras (opcional)">
         <input type="text" name="nombre" placeholder="Nombre del producto" required>
         <input type="text" name="categoria" placeholder="Categoría">
-        <input type="number" step="0.01" name="precio_compra" placeholder="Precio Compra ($)" required>
-        <input type="number" step="0.01" name="precio_venta" placeholder="Precio Venta ($)" required>
-        <input type="number" name="stock" placeholder="Stock Inicial" required>
+        <input type="text" name="imagen_url" placeholder="URL de la Foto del Producto (ej. Link de Google o Web)">
+        <div style="display: flex; gap: 10px;">
+            <input type="number" step="0.01" name="precio_compra" placeholder="Precio Compra ($)" required>
+            <input type="number" step="0.01" name="precio_venta" placeholder="Precio Venta ($)" required>
+            <input type="number" name="stock" placeholder="Stock Inicial" required>
+        </div>
         <button type="submit">Guardar Producto</button>
     </form>
 
     <h2>Inventario Actual</h2>
     <table>
-        <tr><th>Código</th><th>Nombre</th><th>P. Venta</th><th>Stock</th></tr>
+        <tr><th>Foto</th><th>Código</th><th>Nombre</th><th>P. Venta</th><th>Stock</th></tr>
         {% for p in productos %}
         <tr>
+            <td><img src="{{ p[7] or 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png' }}" width="40" height="40" style="object-fit:contain;"></td>
             <td>{{ p[1] or 'N/D' }}</td>
             <td><strong>{{ p[2] }}</strong></td>
             <td>${{ "%.2f"|format(p[5]) }}</td>
@@ -230,14 +266,14 @@ def inventario():
 def add_product():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO productos (codigo, nombre, categoria, precio_compra, precio_venta, stock) VALUES (?, ?, ?, ?, ?, ?)',
+    cursor.execute('INSERT INTO productos (codigo, nombre, categoria, precio_compra, precio_venta, stock, imagen_url) VALUES (?, ?, ?, ?, ?, ?, ?)',
                    (request.form['codigo'], request.form['nombre'], request.form['categoria'], 
-                    float(request.form['precio_compra']), float(request.form['precio_venta']), int(request.form['stock'])))
+                    float(request.form['precio_compra']), float(request.form['precio_venta']), int(request.form['stock']), request.form['imagen_url']))
     conn.commit()
     conn.close()
     return redirect(url_for('inventario'))
 
-# --- VENTANA 3: CONTROL DE FIADOS (CUENTAS POR COBRAR) ---
+# --- VENTANA 3: CONTROL DE FIADOS ---
 @app.route('/fiados')
 def fiados():
     conn = sqlite3.connect('bodega.db')
@@ -283,26 +319,20 @@ def add_fiado():
     conn.close()
     return redirect(url_for('fiados'))
 
-# --- VENTANA 4: CIERRE DE CAJA Y RESUMEN ---
+# --- VENTANA 4: CIERRE DE CAJA ---
 @app.route('/resumen')
 def resumen():
     conn = sqlite3.connect('bodega.db')
     cursor = conn.cursor()
     
-    # Diario
-    cursor.execute("SELECT SUM(total), SUM(cantidad) FROM ventas WHERE DATE(fecha) = DATE('now', 'localtime')")
-    diario = cursor.fetchone()
-    total_dia = diario[0] or 0.0
+    cursor.execute("SELECT SUM(total) FROM ventas WHERE DATE(fecha) = DATE('now', 'localtime')")
+    total_dia = cursor.fetchone()[0] or 0.0
     
-    # Semanal
-    cursor.execute("SELECT SUM(total), SUM(cantidad) FROM ventas WHERE fecha >= datetime('now', '-7 days')")
-    semanal = cursor.fetchone()
-    total_sem = semanal[0] or 0.0
+    cursor.execute("SELECT SUM(total) FROM ventas WHERE fecha >= datetime('now', '-7 days')")
+    total_sem = cursor.fetchone()[0] or 0.0
     
-    # Mensual
-    cursor.execute("SELECT SUM(total), SUM(cantidad) FROM ventas WHERE strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')")
-    mensual = cursor.fetchone()
-    total_mes = mensual[0] or 0.0
+    cursor.execute("SELECT SUM(total) FROM ventas WHERE strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')")
+    total_mes = cursor.fetchone()[0] or 0.0
     
     conn.close()
     
